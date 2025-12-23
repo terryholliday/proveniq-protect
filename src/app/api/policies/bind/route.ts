@@ -23,8 +23,15 @@ function generatePolicyNumber(): string {
   return `PRO-${year}${month}-${random}`;
 }
 
+import { validateSession, unauthorizedResponse } from "@/lib/auth-middleware";
+
 export async function POST(req: NextRequest) {
   try {
+    const session = await validateSession(req);
+    if (!session) {
+      return unauthorizedResponse();
+    }
+
     const body = await req.json();
     const input = BindRequestSchema.parse(body);
 

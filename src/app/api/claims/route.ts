@@ -5,6 +5,8 @@ import prisma from "@/lib/db";
 import { hash256Hex, canonicalize } from "@/shared/crypto/src";
 import { MockLedgerClient } from "@/shared/ledger-client/src/mock";
 import { LiveLedgerClient } from "@/shared/ledger-client/src/live";
+import { validateSession, unauthorizedResponse } from "@/lib/auth-middleware";
+import { ClaimsIQClient } from "@/shared/claimsiq-client";
 
 const USE_REAL_LEDGER = process.env.USE_REAL_LEDGER === "true";
 const ledger = USE_REAL_LEDGER ? new LiveLedgerClient() : new MockLedgerClient();
@@ -30,6 +32,12 @@ function generateClaimNumber(): string {
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Security: Validate Session
+    const session = await validateSession(req);
+    if (!session) {
+      return unauthorizedResponse();
+    }
+
     const body = await req.json();
     const input = ClaimSubmitSchema.parse(body);
 
@@ -40,6 +48,12 @@ export async function POST(req: NextRequest) {
 
     if (!policy) {
       return NextResponse.json({ error: "Policy not found" }, { status: 404 });
+    }
+
+    // 2. Authorization: Ensure policy ownership (if user-bound)
+    // If policy has owner, it must match auth user. If no owner, maybe public? Assuming strict for now.
+    if (policy.ownerId && policy.ownerId !== session.userId && session.role !== 'service') {
+      return NextResponse.json({ error: "Forbidden: Not policy owner" }, { status: 403 });
     }
 
     if (policy.status !== "ACTIVE") {
@@ -90,21 +104,24 @@ export async function POST(req: NextRequest) {
     };
 
     const canonicalHash = hash256Hex(canonicalize(claimPayload));
+    let ledgerEventId = null;
 
     try {
       const receipt = await ledger.appendEvent({
-        type: "PROTECT_QUOTE_CREATED", // Using existing type, should add CLAIM_SUBMITTED
+        type: "PROTECT_CLAIM_SUBMITTED",
         asset_id: policy.assetId,
-        payload: { 
+        payload: {
           event_subtype: "CLAIM_SUBMITTED",
-          ...claimPayload, 
-          canonical_hash_hex: canonicalHash 
+          ...claimPayload,
+          canonical_hash_hex: canonicalHash
         },
         correlation_id: crypto.randomUUID(),
         idempotency_key: `claim-submit-${claim.id}`,
         created_at: new Date().toISOString(),
         schema_version: "1.0.0",
       });
+
+      ledgerEventId = receipt.ledger_event_id;
 
       await prisma.claim.update({
         where: { id: claim.id },
@@ -114,16 +131,25 @@ export async function POST(req: NextRequest) {
       console.error("Ledger write failed:", ledgerError);
     }
 
+    // 3. Integration: Submit to ClaimsIQ
+    const claimsiq = new ClaimsIQClient();
+    const adjudication = await claimsiq.submitClaimForAdjudication({
+      ...claimPayload,
+      ledger_event_id: ledgerEventId
+    });
+
     // Audit log
     await prisma.auditLog.create({
       data: {
         action: "CLAIM_SUBMITTED",
         resourceType: "claim",
         resourceId: claim.id,
-        details: { 
-          policy_id: policy.id, 
+        actorId: session.userId,
+        details: {
+          policy_id: policy.id,
           claim_number: claim.claimNumber,
           claimed_amount_micros: claim.claimedAmountMicros,
+          adjudication_status: adjudication.status
         },
       },
     });
@@ -134,6 +160,7 @@ export async function POST(req: NextRequest) {
       policy_id: policy.id,
       claim_type: claim.claimType,
       status: claim.status,
+      adjudication_status: adjudication.status,
       claimed_amount_micros: claim.claimedAmountMicros,
       created_at: claim.createdAt.toISOString(),
     }, { status: 201 });
