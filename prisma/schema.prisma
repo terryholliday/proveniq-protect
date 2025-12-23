@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Quotes - stored locally before binding
+model Quote {
+  id                  String   @id @default(uuid())
+  assetId             String   @map("asset_id")
+  
+  // Pricing inputs snapshot
+  assetValuationMicros String  @map("asset_valuation_micros") // BigInt as string
+  securityLevel       String   @map("security_level") // LOW, MED, HIGH, VERIFIED
+  lastVerifiedServiceDays Int  @map("last_verified_service_days")
+  transitDamageHistory Boolean @map("transit_damage_history")
+  
+  // Pricing outputs
+  premiumMicros       String   @map("premium_micros") // BigInt as string
+  currency            String   @default("USD")
+  riskBps             Int      @map("risk_bps")
+  pricingVersion      String   @map("pricing_version")
+  reasons             String[] // Discount reasons applied
+  inputsSnapshotHash  String   @map("inputs_snapshot_hash") // SHA-256
+  
+  // Coverage
+  coverageType        String   @map("coverage_type") // THEFT, DAMAGE, FULL
+  termDays            Int      @map("term_days")
+  
+  // Status
+  status              String   @default("PENDING") // PENDING, BOUND, EXPIRED, CANCELLED
+  expiresAt           DateTime @map("expires_at")
+  
+  // Ledger sync
+  ledgerEventId       String?  @map("ledger_event_id")
+  
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  policy              Policy?
+  
+  @@map("quotes")
+  @@index([assetId])
+  @@index([status])
+}
+
+// Policies - bound quotes become policies
+model Policy {
+  id                  String   @id @default(uuid())
+  policyNumber        String   @unique @map("policy_number") // Human-readable
+  
+  // Quote reference
+  quoteId             String   @unique @map("quote_id")
+  quote               Quote    @relation(fields: [quoteId], references: [id])
+  
+  // Asset info (denormalized for quick access)
+  assetId             String   @map("asset_id")
+  
+  // Coverage details
+  coverageType        String   @map("coverage_type")
+  premiumMicros       String   @map("premium_micros")
+  currency            String   @default("USD")
+  
+  // Term
+  effectiveDate       DateTime @map("effective_date")
+  expirationDate      DateTime @map("expiration_date")
+  
+  // Status
+  status              String   @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED, CLAIMED
+  
+  // Owner
+  ownerId             String?  @map("owner_id")
+  
+  // Anchor monitoring
+  anchorId            String?  @map("anchor_id")
+  lastAnchorEventAt   DateTime? @map("last_anchor_event_at")
+  anchorStatus        String?  @map("anchor_status") // ACTIVE, SEALED, BREACHED
+  
+  // Ledger sync
+  ledgerEventId       String?  @map("ledger_event_id")
+  
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  claims              Claim[]
+  
+  @@map("policies")
+  @@index([assetId])
+  @@index([status])
+  @@index([anchorId])
+}
+
+// Claims against policies
+model Claim {
+  id                  String   @id @default(uuid())
+  claimNumber         String   @unique @map("claim_number") // Human-readable
+  
+  // Policy reference
+  policyId            String   @map("policy_id")
+  policy              Policy   @relation(fields: [policyId], references: [id])
+  
+  // Claim details
+  claimType           String   @map("claim_type") // THEFT, DAMAGE, LOSS
+  description         String
+  incidentDate        DateTime @map("incident_date")
+  incidentLocation    String?  @map("incident_location")
+  
+  // Amount
+  claimedAmountMicros String   @map("claimed_amount_micros")
+  approvedAmountMicros String? @map("approved_amount_micros")
+  currency            String   @default("USD")
+  
+  // Status
+  status              String   @default("SUBMITTED") // SUBMITTED, UNDER_REVIEW, APPROVED, DENIED, PAID
+  
+  // Evidence
+  evidenceIds         String[] @map("evidence_ids") // Links to evidence in Ledger
+  anchorEventIds      String[] @map("anchor_event_ids") // Relevant anchor events
+  
+  // Attribution (from ClaimsIQ)
+  attributionPacketId String?  @map("attribution_packet_id")
+  attributionScore    Float?   @map("attribution_score")
+  
+  // Resolution
+  resolutionNotes     String?  @map("resolution_notes")
+  resolvedAt          DateTime? @map("resolved_at")
+  resolvedBy          String?  @map("resolved_by")
+  
+  // Ledger sync
+  ledgerEventId       String?  @map("ledger_event_id")
+  
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  
+  @@map("claims")
+  @@index([policyId])
+  @@index([status])
+}
+
+// Anchor events consumed for risk adjustment
+model AnchorEvent {
+  id                  String   @id @default(uuid())
+  anchorId            String   @map("anchor_id")
+  eventType           String   @map("event_type") // ANCHOR_SEAL_BROKEN, etc.
+  
+  // Event data
+  payload             Json
+  eventTimestamp      DateTime @map("event_timestamp")
+  
+  // Impact
+  policyId            String?  @map("policy_id") // If linked to a policy
+  riskImpact          String?  @map("risk_impact") // NONE, MINOR, MAJOR, CRITICAL
+  
+  // Processing
+  processed           Boolean  @default(false)
+  processedAt         DateTime? @map("processed_at")
+  
+  // Source
+  ledgerEventId       String   @map("ledger_event_id")
+  
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  
+  @@map("anchor_events")
+  @@index([anchorId])
+  @@index([policyId])
+  @@index([processed])
+}
+
+// Audit log
+model AuditLog {
+  id                  String   @id @default(uuid())
+  action              String
+  resourceType        String   @map("resource_type")
+  resourceId          String?  @map("resource_id")
+  actorId             String?  @map("actor_id")
+  details             Json?
+  ipAddress           String?  @map("ip_address")
+  createdAt           DateTime @default(now()) @map("created_at")
+  
+  @@map("audit_log")
+  @@index([action])
+  @@index([resourceType, resourceId])
+}

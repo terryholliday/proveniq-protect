@@ -1,6 +1,6 @@
 import { ILedgerClient, LedgerEvent, LedgerAppendReceipt } from "./types";
 
-const DEFAULT_API_URL = "http://localhost:3002/v1/ledger";
+const DEFAULT_API_URL = "http://localhost:8006/api/v1";
 
 interface LedgerApiResponse {
     success: boolean;
