@@ -3,13 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { PricingContextWireSchema, QuoteRequestSchema, QuoteResponseSchema } from "@/shared/contracts/src";
 import { calculateDynamicPremium } from "@/engine/pricing";
-import { MockLedgerClient } from "@/shared/ledger-client/src/mock";
-import { LiveLedgerClient } from "@/shared/ledger-client/src/live";
+import { ledger } from "@/server/integration/ledger";
 import { hash256Hex, canonicalize } from "@/shared/crypto/src";
 import prisma from "@/lib/db";
-
-const USE_REAL_LEDGER = process.env.USE_REAL_LEDGER === "true";
-const ledger = USE_REAL_LEDGER ? new LiveLedgerClient() : new MockLedgerClient();
 
 export async function POST(req: NextRequest) {
     try {
