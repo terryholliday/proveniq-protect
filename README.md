@@ -1,5 +1,11 @@
 # PROVENIQ Protect
 
+> **STATUS: PARTNER REQUIRED — NOT ACTIVELY DEVELOPED**
+> 
+> This product requires an insurance carrier partner to underwrite policies.
+> The pricing engine and risk adjustment logic are preserved as valuable IP.
+> See `proveniq-main/INTER_APP_CONTRACT.md` for current architecture.
+
 **The Shield — Algorithmic Risk MGA**
 
 Dynamic insurance premiums powered by real-time asset truth from the PROVENIQ Ledger.
