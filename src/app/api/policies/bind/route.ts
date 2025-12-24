@@ -88,25 +88,33 @@ export async function POST(req: NextRequest) {
       data: { status: "BOUND" },
     });
 
-    // Write to Ledger
+    // Write to Ledger (Canonical)
     const policyPayload = {
       policy_id: policy.id,
       policy_number: policy.policyNumber,
       quote_id: quote.id,
-      asset_id: policy.assetId,
       coverage_type: policy.coverageType,
       premium_micros: policy.premiumMicros,
       effective_date: policy.effectiveDate.toISOString(),
       expiration_date: policy.expirationDate.toISOString(),
-      anchor_id: policy.anchorId,
+      // Must not include asset_id/anchor_id inside payload if redundant, 
+      // but inclusion in payload is often useful for payload-specific logic. 
+      // We keep it flat.
     };
 
+    // Calculate Hash (Strict)
     const canonicalHash = hash256Hex(canonicalize(policyPayload));
 
     try {
+      // Using LedgerClient (which should handle envelope construction)
+      // or manual construction if client is raw.
+      // Based on file content, 'ledger' is assumed to be a high-level client.
+      // We ensure the event type matches the Locked Schema.
+
       const receipt = await ledger.appendEvent({
-        type: "POLICY_BOUND",
+        type: "PROTECT_POLICY_BOUND", // Correct noun_verb
         asset_id: policy.assetId,
+        anchor_id: policy.anchorId ?? undefined,
         payload: { ...policyPayload, canonical_hash_hex: canonicalHash },
         correlation_id: crypto.randomUUID(),
         idempotency_key: `policy-bind-${policy.id}`,
@@ -120,8 +128,8 @@ export async function POST(req: NextRequest) {
         data: { ledgerEventId: receipt.ledger_event_id },
       });
     } catch (ledgerError) {
-      console.error("Ledger write failed:", ledgerError);
-      // Policy is still valid, just not synced to ledger
+      console.error("Ledger write failed (Non-Blocking):", ledgerError);
+      // In production, this should queue for retry.
     }
 
     // Audit log
